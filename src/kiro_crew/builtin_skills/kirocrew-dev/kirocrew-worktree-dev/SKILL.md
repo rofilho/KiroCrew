@@ -24,6 +24,10 @@ cd website && npm ci && cd ..
 git worktree list
 ```
 
+A worktree you will start a pod from never goes under `$KIROCREW_SCRATCH`: Dev
+Fleet cannot see any session's scratch, so `pod_up` refuses it. Use the path
+above or `<main clone>/.worktrees/<name>`.
+
 To bring the main clone itself current (the first path `git worktree list`
 prints), fast-forward it and nothing else:
 
