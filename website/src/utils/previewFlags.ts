@@ -209,6 +209,25 @@ export const PREVIEW_EXPLORE = `${PREVIEW_FLAG_PREFIX}explore`
 export const PREVIEW_CREW_OAUTH = `${PREVIEW_FLAG_PREFIX}crew-oauth`
 
 /**
+ * Crewmate chat colours from the crewmate's dashboard page (#20635): the chat
+ * column on the Crewmates page tints its background and accent from the colour
+ * tokens of the dashboard page that crewmate has in force, so the chat and the
+ * Dashboard tab beside it read as one theme.
+ *
+ * Read it through `useChatPageColors()` (`hooks/usePreviewFlag.ts`), which is
+ * what the thread column consults.
+ *
+ * Default OFF, and OFF is byte-for-byte today's chat: the column renders the
+ * same element with no injected variables, so a resting chat is in no way
+ * conditional on this key. With it ON, a crewmate whose page declares the
+ * `--bg` / `--accent` colour tokens drives the chat from them, each background
+ * paired with a text colour derived for a >= 4.5:1 contrast; a page that
+ * declares neither keeps the default look. Gating the look only -- the chat's
+ * behaviour, transport and layout are untouched either way.
+ */
+export const PREVIEW_CHAT_PAGE_COLORS = `${PREVIEW_FLAG_PREFIX}chat-page-colors`
+
+/**
  * Every live preview-flag key, the ones the gateway keeps. Each one's name (see
  * {@link previewFlagName}) is a writable `dashboard.feature_previews.<name>` path
  * in the gateway config; `test_feature_previews_config.py` pins this list equal
@@ -227,6 +246,7 @@ export const PREVIEW_FLAGS: readonly string[] = [
   PREVIEW_MATE_SESSIONS,
   PREVIEW_EXPLORE,
   PREVIEW_CREW_OAUTH,
+  PREVIEW_CHAT_PAGE_COLORS,
 ]
 
 /**

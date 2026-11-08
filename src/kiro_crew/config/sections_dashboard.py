@@ -35,6 +35,7 @@ EXTERNAL_TERMINAL_APPS: tuple[str, ...] = (
 # test_feature_previews_config.py pins the two lists equal.
 FEATURE_PREVIEW_FLAGS: tuple[str, ...] = (
     "artifact_deploy",
+    "chat_page_colors",
     "crew_mode",
     "crew_oauth",
     "explore",
