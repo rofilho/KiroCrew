@@ -109,6 +109,52 @@ async def _bind_member_workspace(
     state.push_slots_update()
 
 
+async def retire_stale_member_slot(state: DashboardState | None, cfg, store: str) -> bool:
+    """Close the deleted Bot's DM slot still live on the thread key of the kept *store*.
+
+    A Bot that adopts a kept memory store derives the same thread key as the
+    deleted Bot that left it (same slug, same store), so a slot still live under
+    that key is the deleted Bot's: pinned to its name and holding the approval
+    grants seeded from its record, even when the new Bot reuses the name. The
+    create closes it before anything is published, the way the tab close does:
+    the conversation is saved to history as closed, and the next open rehydrates
+    it pinned to the new Bot and seeded from the new record.
+
+    Only an ownerless kept store's slot is touched; for any other store the adopt
+    refuses on its own. Returns ``False`` when the slot could not be closed, so
+    the create is refused rather than handing the new Bot those grants.
+    """
+    from kiro_crew.member_memory_adopt import ownerless_defect
+
+    record = cfg.memory_stores.get(store)
+    if state is None or record is None or ownerless_defect(cfg, store) is not None:
+        return True
+    try:
+        key = members_mod.member_slot_key(record.owner_member_id, store)
+    except (MemberSlugError, ValueError):
+        return True
+    slot = state.get_slot(key)
+    if slot is None or slot.mode != members_mod.DM_SLOT_MODE:
+        return True
+    from kiro_crew.dashboard.chat_handlers import close_slot
+    from kiro_crew.dashboard.chat_utils_slots import revoke_slot_trust
+
+    # A slot sharing the thread's session keeps living after the close; its
+    # trust must not write the deleted Bot's grant back onto that session.
+    revoke_slot_trust(state, slot)
+    try:
+        await close_slot(state, slot, key)
+    except Exception:
+        logger.warning(
+            "could not close the live thread %r on kept store %r; the adopt is refused",
+            slot.agent,
+            store,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 async def _guard_and_pin_private_store(
     state: "DashboardState",
     slug_owners: list[str],
