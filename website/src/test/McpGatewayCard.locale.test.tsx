@@ -51,6 +51,23 @@ describe('McpGatewayCard in the active language', () => {
   })
 })
 
+describe('McpGatewayCard counts in a language with its own digits', () => {
+  it('writes the backend and stub counts in Bengali digits, like the sizes beside them (#33230)', async () => {
+    await i18next.changeLanguage('bn')
+    renderWithProviders(<McpGatewayCard />)
+    // The size tile is already Bengali (২.৮); the counts must match it.
+    expect((await screen.findAllByText(/^২\.৮ GB/)).length).toBeGreaterThan(0)
+    const values = screen.getAllByTestId('stat-card-value').map(v => v.textContent)
+    expect(values).toContain('১ / ৮')
+    expect(values).toContain('২')
+    const row = screen.getByRole('row', { name: /slack-mcp/ })
+    const cells = within(row).getAllByRole('cell').map(c => c.textContent)
+    expect(cells[2]).toBe('২')
+    // The pid is an identifier and stays as the gateway reported it.
+    expect(cells[1]).toBe('41')
+  })
+})
+
 describe('formatKb in the active language', () => {
   it('uses the locale decimal separator and no digit grouping', async () => {
     await i18next.changeLanguage('de')
