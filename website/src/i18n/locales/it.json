@@ -6099,6 +6099,15 @@
     "viewPr": "Pull request"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "letto alle {{time}}",
+      "conductor_said": "Coordinatore alle {{time}}",
+      "conductor_pick": "Scelta del coordinatore",
+      "checker": "verificatore {{time}}: {{verdict}}",
+      "verdict_pass": "controlli superati",
+      "verdict_fail": "controlli falliti",
+      "verdict_pending": "non ancora finito"
+    },
     "dataHomeOwnerNotice": {
       "check_failed": "Impossibile controllare a chi appartengono i file di {{productName}}.",
       "message": "Alcuni file di {{productName}} appartengono a un altro utente, quindi {{productName}} non riesce a leggerli.",
@@ -6125,6 +6134,7 @@
       "checks_unknown": "{{n}} sconosciuti",
       "done": "Fatto",
       "label": "Riepilogo",
+      "tags": "Stato",
       "more_waiting": "Altre {{count}}",
       "needs_you": "Serve a te",
       "next": "Prossimi passi",

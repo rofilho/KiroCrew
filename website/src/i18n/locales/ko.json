@@ -5765,6 +5765,15 @@
     "viewPr": "풀 리퀘스트"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "{{time}}에 확인",
+      "conductor_said": "지휘 {{time}}",
+      "conductor_pick": "지휘 추천",
+      "checker": "검사기 {{time}}: {{verdict}}",
+      "verdict_pass": "검사 통과",
+      "verdict_fail": "검사 실패",
+      "verdict_pending": "아직 안 끝남"
+    },
     "dataHomeOwnerNotice": {
       "check_failed": "{{productName}} 파일의 소유자를 확인하지 못했습니다.",
       "message": "일부 {{productName}} 파일이 다른 사용자 소유라서 {{productName}}이(가) 읽을 수 없습니다.",
@@ -5791,6 +5800,7 @@
       "checks_unknown": "{{n}}개 알 수 없음",
       "done": "한 일",
       "label": "진행 요약",
+      "tags": "상태",
       "more_waiting": "{{count}}개 더",
       "needs_you": "확인이 필요해요",
       "next": "다음 단계",

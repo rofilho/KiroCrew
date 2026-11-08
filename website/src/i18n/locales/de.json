@@ -5932,6 +5932,15 @@
     "viewPr": "Pull Request"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "gelesen {{time}}",
+      "conductor_said": "Koordinator um {{time}}",
+      "conductor_pick": "Empfehlung des Koordinators",
+      "checker": "Prüfer {{time}}: {{verdict}}",
+      "verdict_pass": "Prüfungen bestanden",
+      "verdict_fail": "Prüfungen fehlgeschlagen",
+      "verdict_pending": "noch nicht fertig"
+    },
     "dataHomeOwnerNotice": {
       "check_failed": "Konnte nicht prüfen, wem die {{productName}}-Dateien gehören.",
       "message": "Einige {{productName}}-Dateien gehören einem anderen Benutzer, deshalb kann {{productName}} sie nicht lesen.",
@@ -5958,6 +5967,7 @@
       "checks_unknown": "{{n}} unbekannt",
       "done": "Erledigt",
       "label": "Zwischenstand",
+      "tags": "Status",
       "more_waiting": "{{count}} weitere",
       "needs_you": "Braucht dich",
       "next": "Als Nächstes",

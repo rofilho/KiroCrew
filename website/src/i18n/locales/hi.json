@@ -5932,6 +5932,15 @@
     "viewPr": "पुल रिक्वेस्ट"
   },
   "components": {
+    "crewPrFacts": {
+      "read": "{{time}} पर पढ़ा",
+      "conductor_said": "संचालक {{time}} पर",
+      "conductor_pick": "संचालक का सुझाव",
+      "checker": "जाँचकर्ता {{time}}: {{verdict}}",
+      "verdict_pass": "जाँच पास",
+      "verdict_fail": "जाँच विफल",
+      "verdict_pending": "अभी पूरा नहीं"
+    },
     "dataHomeOwnerNotice": {
       "check_failed": "{{productName}} की फ़ाइलें किसकी हैं, यह जाँचा नहीं जा सका।",
       "message": "{{productName}} की कुछ फ़ाइलें किसी दूसरे उपयोगकर्ता की हैं, इसलिए {{productName}} उन्हें पढ़ नहीं पा रहा।",
@@ -5958,6 +5967,7 @@
       "checks_unknown": "{{n}} अज्ञात",
       "done": "हो चुका",
       "label": "सारांश",
+      "tags": "स्थिति",
       "more_waiting": "{{count}} और",
       "needs_you": "तुमसे चाहिए",
       "next": "आगे",
