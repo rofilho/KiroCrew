@@ -529,6 +529,40 @@ async def test_cancel_missing_run_is_404_job_not_found(
 
 
 @pytest.mark.asyncio
+async def test_a_run_the_retention_cap_removed_reads_as_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sdk: JobSDK
+) -> None:
+    # Every route reads the store, so a record the cap removed answers like an
+    # id that never existed, and the run the cap kept is served as before.
+    _setup_guards(tmp_path, monkeypatch)
+    sdk.register("k", lambda handle, **p: None, retention=1)
+
+    def swept(run_id: str) -> bool:
+        # Out of the live table and past its own sweep (``_unswept``), so the
+        # sweeps run in the order the runs finish.
+        live = sdk.cancelling_and_live_ids()[1]
+        return run_id not in live and run_id not in sdk._unswept  # noqa: SLF001
+
+    first = sdk.start("k")
+    await _wait_terminal(sdk, first)
+    await async_wait_until(lambda: swept(first), off_loop=True)
+    second = sdk.start("k")
+    await _wait_terminal(sdk, second)
+    await async_wait_until(lambda: swept(second), off_loop=True)
+    # Checked by name, not by reading it: on Windows an open record blocks its delete.
+    assert not (sdk.store.dir / f"{first}.json").exists()
+    async with TestClient(TestServer(_make_app())) as client:
+        recent = await client.get(f"{_base()}/recent")
+        assert [r["run_id"] for r in (await recent.json())["runs"]] == [second]
+        got = await client.get(f"{_base()}/{first}")
+        cancel = await client.post(f"{_base()}/{first}/cancel")
+        for resp in (got, cancel):
+            assert resp.status == 404
+            assert (await resp.json())["code"] == "job_not_found"
+        assert (await client.get(f"{_base()}/{second}")).status == 200
+
+
+@pytest.mark.asyncio
 async def test_cancel_non_cancellable_run_is_409_with_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sdk: JobSDK
 ) -> None:

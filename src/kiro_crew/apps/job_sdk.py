@@ -136,6 +136,13 @@ from kiro_crew.apps.job_sdk_records import (  # noqa: F401
     _redact,
     _validated_params,
 )
+from kiro_crew.apps.job_sdk_retention import (  # noqa: F401
+    _NO_RETENTION,
+    _age_key,
+    _read_record_nolink,
+    _sweep,
+    sweep_retention,
+)
 from kiro_crew.apps.job_sdk_returns import (  # noqa: F401
     _SUSPENDABLE_KINDS,
     _SUSPENDABLE_RETURNED,
@@ -159,6 +166,7 @@ from kiro_crew.sel import sel
 #
 #   ``job_sdk_records`` -- the run record, its states and causes, params, and the handle
 #   ``job_sdk_returns`` -- what a runner hands back, and stopping returned work
+#   ``job_sdk_retention`` -- the per-kind retention cap and its sweep
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +296,8 @@ class CleanupResult:
 class _Runner:
     fn: JobFn
     cancellable: bool
+    #: How many terminal records of this kind to keep; ``0`` keeps them all.
+    retention: int = _NO_RETENTION
 
 
 @dataclass
@@ -395,6 +405,56 @@ class JobStore:
                 continue
             yield run
 
+    def _iter_runs_nolink(self) -> Iterator[JobRun]:
+        """Every record on disk, each opened without following a link.
+
+        The retention sweep's scan, in place of ``iter_runs``: ``jobs/`` is
+        app-writable, so a link at a record's name is refused, a non-regular file is
+        skipped and a read stops at ``_MAX_RECORD_BYTES`` (``_read_record_nolink``).
+        Not ``safe_read_file_bytes_nolink``: its agent-facing path screen refuses an
+        app data dir the security lists protect, aws-control's among them. Only a
+        file named as a valid run id is read, and one whose body names another
+        ``run_id`` yields nothing, so the sweep never removes a different run's
+        file. Any refusal or parse failure skips that file, and the scan never
+        raises.
+        """
+        try:
+            if not self.dir.is_dir():
+                return
+            paths = sorted(self.dir.glob("*.json"))
+        except OSError:
+            return
+        for path in paths:
+            try:
+                self._path(path.stem)
+            except ValueError:
+                continue
+            raw = _read_record_nolink(path, _MAX_RECORD_BYTES)
+            if raw is None:
+                continue
+            try:
+                run = JobRun.from_dict(json.loads(raw.decode("utf-8")))
+            except (TypeError, ValueError, RecursionError):
+                continue
+            if run.run_id != path.stem:
+                continue
+            yield run
+
+    def remove(self, run_id: str) -> bool:
+        """Delete one run's record. Returns whether a file was removed.
+
+        An absent file returns False, and so does a real OS failure, which is
+        logged; the next sweep tries again.
+        """
+        try:
+            self._path(run_id).unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError):
+            logger.warning("could not remove job record: %s", run_id)
+            return False
+
     def remove_all(self) -> tuple[int, int]:
         """Delete every record. Returns ``(removed, failed)``.
 
@@ -445,6 +505,15 @@ class JobSDK:
         #: the SAME critical section as the dedupe claim, so there is no window
         #: between the check and the claim.
         self._closed = False
+        #: Serializes this SDK's retention sweeps (``job_sdk_retention``).
+        self._sweep_lock = threading.Lock()
+        #: Runs that have finished but whose own retention sweep has not run yet.
+        #: No sweep removes one, so two runs finishing at once cannot remove each
+        #: other. Guarded by ``_lock``.
+        self._unswept: set[str] = set()
+
+    # Retention member, owned by ``job_sdk_retention``.
+    _sweep_retention = sweep_retention
 
     @property
     def app_name(self) -> str:
@@ -520,6 +589,11 @@ class JobSDK:
                 latest = self._store.read(run.run_id)
                 if latest is not None and latest.is_terminal:
                     return False
+                # Absent: retention evicted it after the caller's snapshot was
+                # read (reconcile is the only caller). Writing it would bring a
+                # removed run back as falsely ``interrupted``.
+                if latest is None:
+                    return False
             try:
                 self._store.write(run)
                 return True
@@ -529,7 +603,14 @@ class JobSDK:
 
     # ── Registration ──
 
-    def register(self, kind: str, fn: JobFn, *, cancellable: bool = False) -> None:
+    def register(
+        self,
+        kind: str,
+        fn: JobFn,
+        *,
+        cancellable: bool = False,
+        retention: int = _NO_RETENTION,
+    ) -> None:
         """Bind ``kind`` to the callable that services it.
 
         Call from the app's ``on_startup`` hook. ``cancellable=True`` is the
@@ -559,9 +640,17 @@ class JobSDK:
         those are design questions this refusal does not answer. It answers only
         the question a caller cannot currently ask -- "did my runner run" -- at
         the one point where the answer is still cheap.
+
+        ``retention`` caps how many terminal records of this kind are kept
+        (app-kit-platform §26.1): after each terminal write the oldest ones past
+        the cap are removed. ``0`` keeps every record. The SDK judges a run
+        finished by its status alone, so a kind whose work goes on after its
+        status turns terminal must not set it.
         """
         if not kind:
             raise ValueError("job kind must be a non-empty string")
+        if retention < 0:
+            raise ValueError(f"job retention must not be negative, got {retention}")
         lazy = _lazy_call_shape(fn)
         if lazy:
             raise ValueError(
@@ -572,7 +661,7 @@ class JobSDK:
                 "with asyncio.run)."
             )
         with self._lock:
-            self._runners[kind] = _Runner(fn=fn, cancellable=cancellable)
+            self._runners[kind] = _Runner(fn=fn, cancellable=cancellable, retention=retention)
         logger.info("App %s registered job kind: %s", self._app_name, kind)
 
     def kinds(self) -> list[str]:
@@ -900,7 +989,10 @@ class JobSDK:
                 self._live.pop(run.run_id, None)
                 if run.dedupe_key:
                     self._keys.pop((run.kind, run.dedupe_key), None)
+                self._unswept.add(run.run_id)
             self._audit(f"job_{run.status}", run.run_id, "ok")
+            # Never raises, and takes this run back out of ``_unswept``.
+            self._sweep_retention(runner, run)
 
     def _write_terminal(self, run: JobRun, handle: JobHandle) -> None:
         """Persist a run's final state, retrying once.
