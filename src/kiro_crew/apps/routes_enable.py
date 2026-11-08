@@ -45,6 +45,7 @@ from kiro_crew.apps.registry import _manifest_shell_platform_refusal, minimal_en
 from kiro_crew.apps.routes_lifecycle import (
     _backend_platform_refusal,
     _deregister_app_off_loop,
+    _reach_open_chats,
     _redact_warning,
     _refuse_while_startup_hook_runs,
     _register_app_off_loop,
@@ -338,6 +339,7 @@ async def handle_enable_app(request: web.Request) -> web.Response:
         field_name="onEnableTimeout",
     )
 
+    registered_mcp_servers: list[str] = []
     # Per-app lifecycle lock: enable mutates metadata, registers resources,
     # and starts the backend — must not interleave with a concurrent
     # install/update/uninstall of the same app (e.g. enabling while an
@@ -382,6 +384,7 @@ async def handle_enable_app(request: web.Request) -> web.Response:
             # call is queued after this handler returns, so a demotion could scrub in
             # between and the queued write would restore the dead url.
             resp["registration"] = reg.to_dict()
+            registered_mcp_servers = reg.mcp_servers
             if backend:
                 resp["backend"] = backend.to_dict()
             # A native-Windows exec backend is refused with the same None as "no
@@ -546,7 +549,12 @@ async def handle_enable_app(request: web.Request) -> web.Response:
         sel().log_api_access(
             caller="dashboard", operation="app_enable", outcome="completed", resources=name
         )
-        return web.json_response(resp)
+    # After the lifecycle lock: a reset drains every open session, and the enable has
+    # committed. The onEnable rollback returned above, so this runs only on success.
+    sessions_reset = await _reach_open_chats(request, name, registered_mcp_servers)
+    if sessions_reset is not None:
+        resp["sessions_reset"] = sessions_reset
+    return web.json_response(resp)
 
 
 async def handle_disable_app(request: web.Request) -> web.Response:

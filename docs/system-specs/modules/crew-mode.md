@@ -4169,7 +4169,10 @@ runs the agent it recorded. A `template` record (a worker included) stays exact
   (`McpToolingProvider.extra_mcp_servers()`) that the worker mounts gets an
   `@<server>` ref in `tools`, which `build_agent_config()` leaves out
   (`service_agents._register_edition_refs`); `allowedTools` gains nothing, so
-  those tools prompt. Both specs are written from
+  those tools prompt. The team lead (`kirocrew-team-lead`,
+  `service_agents._install_team_lead_agent`) is built from
+  `build_agent_config()` too and gets the same refs, because its charter
+  promises the full default toolset. Both mate specs are written from
   `build_agent_config()` on every gateway start
   (`service_agents._install_mate_conductor_agent` /
   `_install_mate_worker_agent`) into `~/.kiro/mates/agents/`, beside the
@@ -4696,7 +4699,10 @@ it); `{skill}` adds a loaded skill; each server may name `auto_approve` tools.
 `not_on_gateway` (absent or switched off), `carries_settings`, `name_in_use` (a registry name this gateway already runs),
 `unknown_skill`, `registry_unavailable` and any other provider than the official
 registry (an edition provider installs into the user's config, not the
-Bot's). A draft of additions takes only `additions` and `enroll`
+Bot's): an id only the edition package registry holds is refused
+`edition_package`, naming the `mcp.install` card that installs it, after which
+the conductor asks for it with `source: "gateway"`. A draft of additions takes
+only `additions` and `enroll`
 (`invalid_additions` otherwise): the card folds its raw rows under Details, so a
 raw operation riding along would be folded there unseen. The `crewmate.capabilities` card shows the full launch line, a
 "comes from" row per server (this gateway's only while the draft's entry still

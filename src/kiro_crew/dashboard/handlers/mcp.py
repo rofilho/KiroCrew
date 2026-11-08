@@ -1073,6 +1073,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _shared_agent_home_declined,
         _sync_mcp_to_agent_batch_unlocked,
         _sync_mcp_to_agent_unlocked,
+        apply_mcp_change_to_open_chats,
     )
     from kiro_crew.dashboard.handlers.mcp_config_entries import (  # noqa: F401
         _get_kirocrew_entry,

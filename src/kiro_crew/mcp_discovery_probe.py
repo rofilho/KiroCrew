@@ -77,12 +77,28 @@ logger = logging.getLogger("kiro_crew.mcp_discovery")
 # update) may prepend a banner line or two.
 _MAX_BANNER_LINES = 50
 
+#: How many of the skipped non-JSON stdout lines a failed probe's error keeps: the
+#: last ones, because a launcher that cannot start its server prints why just
+#: before it exits.
+_STDOUT_TAIL_LINES = 5
+#: How much of each kept stdout line is held for the redactors. Far wider than the
+#: shown width, so a line is cut for display only after a credential in it was
+#: redacted whole.
+_STDOUT_LINE_HELD_CHARS = 4096
+#: How much of each kept stdout line the error shows, so one long line cannot
+#: crowd out the rest.
+_STDOUT_TAIL_LINE_CHARS = 200
+
 #: A probe's error for an ``env`` that is not a map of names to values.
 _ENV_NOT_A_MAP_ERROR = 'env must be an object of variable names to values, like {"API_KEY": "..."}'
 
 
 async def _read_stdio_jsonrpc_response(
-    stream: asyncio.StreamReader, timeout: float, name: str = ""
+    stream: asyncio.StreamReader,
+    timeout: float,
+    name: str = "",
+    *,
+    skipped: list[str] | None = None,
 ) -> dict | None:
     """Read stdout until a JSON-RPC *response* object appears.
 
@@ -101,6 +117,12 @@ async def _read_stdio_jsonrpc_response(
     on EOF or once more than ``_MAX_BANNER_LINES`` banner lines have arrived
     (the flood case is logged). Raises ``asyncio.TimeoutError`` if the deadline
     elapses, so the caller's existing timeout handling is preserved.
+
+    *skipped*, when given, receives each non-JSON line as it is read (stripped,
+    held to ``_STDOUT_LINE_HELD_CHARS``) and keeps only the last
+    ``_STDOUT_TAIL_LINES``, so the lines are there on every way this gives up,
+    a timeout included. One list may span several reads of the same stream.
+    The lines are raw process output: redact them before showing them.
 
     Note the divergent sibling: the remote HTTP/SSE path uses
     :func:`_read_jsonrpc_response`, which returns ``{}`` (not ``None``) on an
@@ -140,6 +162,9 @@ async def _read_stdio_jsonrpc_response(
             banner_lines += 1
             if not first_banner:
                 first_banner = text[:120]
+            if skipped is not None:
+                skipped.append(text[:_STDOUT_LINE_HELD_CHARS])
+                del skipped[:-_STDOUT_TAIL_LINES]
             if banner_lines > _MAX_BANNER_LINES:
                 logger.warning(
                     "MCP probe [%s]: no JSON-RPC response after %d banner "
@@ -378,6 +403,8 @@ async def probe_server(
     proc = None
     sandbox_cleanup: str | None = None
     probe_tmp: "Path | None" = None
+    # The non-JSON stdout lines both handshake reads skip, for a failed probe's error.
+    stdout_skipped: list[str] = []
     try:
         env = dict(os.environ)
         # The same expression backs command resolution and the PATH emitted into
@@ -719,7 +746,7 @@ async def probe_server(
             # stray line makes json.loads() raise and a healthy server is wrongly
             # marked errored.
             resp = await _read_stdio_jsonrpc_response(
-                proc.stdout, _get_probe_timeout(), name=server.name
+                proc.stdout, _get_probe_timeout(), name=server.name, skipped=stdout_skipped
             )
             fallback = downgrade_protocol_version(resp, protocol_version)
             if not fallback:
@@ -782,7 +809,7 @@ async def probe_server(
         await proc.stdin.drain()
 
         resp2 = await _read_stdio_jsonrpc_response(
-            proc.stdout, _get_probe_timeout(), name=server.name
+            proc.stdout, _get_probe_timeout(), name=server.name, skipped=stdout_skipped
         )
         if resp2 is None:
             # initialize succeeded but tools/list yielded no response (banner
@@ -937,6 +964,21 @@ async def probe_server(
         server.error = _sanitize_probe_error(exc)
         logger.warning("MCP probe failed [%s]: %s", server.name, server.error)
     finally:
+        # When the probe failed, append a redacted tail of the non-JSON stdout
+        # lines the reader skipped. A launcher fronting the server prints why it
+        # could not start it (a missing tool, a refused install step) on stdout
+        # and exits, and without these lines the error reads only "no response"
+        # or "timeout". The same two redactors as stderr below run on whole lines,
+        # before any line is cut to its shown width. A redaction failure leaves
+        # the error as it is, so the teardown below always runs.
+        if server.status == "error" and stdout_skipped:
+            try:
+                clean, _ = redact_exfiltration_urls("\n".join(stdout_skipped))
+                clean, _ = redact_credentials(clean)
+                shown = "\n".join(line[:_STDOUT_TAIL_LINE_CHARS] for line in clean.splitlines())
+                server.error = f"{server.error}\nstdout: {shown[-500:]}"
+            except Exception:
+                logger.debug("MCP probe [%s]: stdout tail unavailable", server.name, exc_info=True)
         # When the probe failed, drain any stderr the child wrote and append
         # a redacted tail to the error message. Most MCP servers print a
         # useful diagnostic (Python traceback, ModuleNotFoundError,

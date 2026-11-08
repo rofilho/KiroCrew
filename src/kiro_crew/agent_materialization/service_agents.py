@@ -665,8 +665,10 @@ def _install_team_lead_agent() -> None:
 
     Derives from the kirocrew agent (MCP servers, security, tools) and swaps in the
     team-lead charter + identity, leaving out the platform guide server
-    (:func:`_without_guide_server`) exactly as research does. On top of that surface
-    it mounts the two opt-in servers dispatch needs, ``kirocrew-dashboard`` and
+    (:func:`_without_guide_server`) exactly as research does. Each edition server
+    that surface mounts is referenced in ``tools`` (:func:`_register_edition_refs`),
+    so the lead's tools match the default toolset its charter promises. On top of that
+    surface it mounts the two opt-in servers dispatch needs, ``kirocrew-dashboard`` and
     ``kirocrew-work`` (:func:`_mount_team_lead_dispatch`), granting the goal
     conductor's existing verb tuples through the governance ceiling.
 
@@ -693,6 +695,7 @@ def _install_team_lead_agent() -> None:
     skill_resources.map_prompt_skills(
         config, "team-lead", "goal-conductor", "dashboard", *skill_resources.WIDGET_POINTER_SKILLS
     )
+    _register_edition_refs(config)
     _mount_team_lead_dispatch(config)
     agent_mod.kiro_agents_dir_path().mkdir(parents=True, exist_ok=True)
     path = agent_mod.kiro_agents_dir_path() / _TEAM_LEAD_AGENT_FILENAME

@@ -39,6 +39,7 @@ from kiro_crew.apps.routes_lifecycle import (
     _backend_platform_refusal,
     _check_min_version,
     _deregister_app_off_loop,
+    _reach_open_chats,
     _refuse_while_startup_hook_runs,
     _register_app_off_loop,
     _reinstall_from_registry,
@@ -601,4 +602,7 @@ async def handle_install_app(request: web.Request) -> web.Response:
     install_body: dict[str, Any] = {**result.to_dict(), "registration": reg.to_dict()}
     if backend_refused:
         install_body["backend_refused"] = backend_refused
+    sessions_reset = await _reach_open_chats(request, result.name, reg.mcp_servers)
+    if sessions_reset is not None:
+        install_body["sessions_reset"] = sessions_reset
     return web.json_response(install_body, status=201)

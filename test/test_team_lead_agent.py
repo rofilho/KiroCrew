@@ -16,6 +16,7 @@ to pin.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
 import pathlib
@@ -25,6 +26,9 @@ import pytest
 from kiro_crew import agent
 from kiro_crew.agent_files import OWNED_KIRO_AGENT_FILES, TEAM_LEAD_AGENT_FILENAME
 from kiro_crew.agent_materialization import managed_mcp, service_agents
+from kiro_crew.config.loader import KiroCrewConfig
+from kiro_crew.platform import build_default_context, set_context
+from kiro_crew.platform.context import reset_context
 
 _SKILL = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -120,6 +124,55 @@ class TestTheInstallerWritesADefaultAgent:
         assert installed["name"] == "kirocrew-team-lead"
         assert installed["prompt"] == agent._TEAM_LEAD_SYSTEM_PROMPT
         assert sorted(p.name for p in tmp_path.iterdir()) == [TEAM_LEAD_AGENT_FILENAME]
+
+
+#: Servers an edition contributes through ``McpToolingProvider.extra_mcp_servers()``.
+_EDITION_SERVERS = {
+    "edition-tools": {"command": "edition-tools", "args": ["--stdio"]},
+    "edition-creds": {"command": "/opt/edition/creds", "args": []},
+}
+
+
+class _EditionTooling:
+    def extra_mcp_servers(self):
+        return {name: dict(spec) for name, spec in _EDITION_SERVERS.items()}
+
+    def extra_skills(self):
+        return []
+
+
+class TestTheLeadExposesTheEditionServersItMounts:
+    """``build_agent_config`` mounts each edition server in ``mcpServers`` and leaves
+    ``tools`` alone, and kiro-cli exposes only servers named as ``@<server>`` in
+    ``tools``. The lead's charter promises the full default toolset, so each edition
+    server it mounts is referenced there, and approving its tools stays with the gate.
+    """
+
+    @pytest.fixture
+    def lead(self, tmp_path, monkeypatch):
+        base = build_default_context(KiroCrewConfig())
+        set_context(dataclasses.replace(base, mcp_tooling=_EditionTooling()))
+        try:
+            monkeypatch.setattr(agent, "kiro_agents_dir_path", lambda: tmp_path)
+            service_agents._install_team_lead_agent()
+            target = tmp_path / TEAM_LEAD_AGENT_FILENAME
+            yield json.loads(target.read_text(encoding="utf-8"))
+        finally:
+            reset_context()
+
+    def test_every_edition_server_it_mounts_is_referenced_once(self, lead):
+        for name in _EDITION_SERVERS:
+            assert name in lead["mcpServers"]
+            assert lead["tools"].count(f"@{name}") == 1
+
+    def test_the_refs_expose_the_tools_without_approving_them(self, lead):
+        allowed = lead.get("allowedTools") or []
+        for name in _EDITION_SERVERS:
+            assert not any(t == f"@{name}" or t.startswith(f"@{name}/") for t in allowed)
+
+    def test_the_dispatch_refs_are_kept(self, lead):
+        assert "@kirocrew-dashboard" in lead["tools"]
+        assert "@kirocrew-work" in lead["tools"]
 
 
 class TestTheLeadReportsToItsParent:
