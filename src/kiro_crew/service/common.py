@@ -181,6 +181,10 @@ def service_environment(home: str) -> "dict[str, str]":
     * ``KIROCREW_KIRO_BIN`` — only when the installer sets it, made absolute.
       The readiness ``whoami`` probe's real-home fallback keys off it; dropping
       it would leave the gateway not signed in.
+    * ``KIROCREW_NODE_BIN_DIR``: only when the installer sets it to one
+      absolute dir. It puts that Node ahead of nvm's on the MCP search path
+      (:mod:`kiro_crew.env_node_pins`); a relative value or one carrying a
+      ``:`` would add PATH entries nobody named, so it is dropped.
     """
     utf8_locale = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
     env = {
@@ -196,6 +200,9 @@ def service_environment(home: str) -> "dict[str, str]":
     kiro_bin = os.environ.get("KIROCREW_KIRO_BIN", "").strip()
     if kiro_bin:
         env["KIROCREW_KIRO_BIN"] = os.path.abspath(kiro_bin)
+    node_bin = os.environ.get("KIROCREW_NODE_BIN_DIR", "").strip()
+    if node_bin and ":" not in node_bin and "\0" not in node_bin and os.path.isabs(node_bin):
+        env["KIROCREW_NODE_BIN_DIR"] = node_bin
     # KIROCREW_PORT is the only input DASHBOARD_PORT reads, so without it the
     # service can only bind the default 5476. Captured from the installer:
     # `KIROCREW_PORT=5477 kirocrew service install` bakes 5477 into the unit.
@@ -314,9 +321,10 @@ def _home_override_is_set(environ: "Mapping[str, str] | None" = None) -> bool:
 def _names_defined_in_env_file(path: Path) -> "set[str]":
     """Return the variable names a ``.env`` file assigns a NON-BLANK value.
 
-    Mirrors ``load_credentials()``'s parse (strip, skip blanks and ``#``
-    comments, split on the first ``=``), including its skip of a blank value:
-    a bare ``NAME=`` never reaches ``os.environ``, so it counts as absent.
+    Reads the file through ``load_credentials()``'s own parser
+    (``loader.parse_env_lines``: last assignment wins), including its skip of a
+    blank value: a bare ``NAME=`` never reaches ``os.environ``, so it counts as
+    absent, also after an earlier non-blank assignment of the same name.
 
     Values are checked for emptiness and otherwise discarded. An unreadable or
     absent file yields an empty set, so the caller warns (the safe direction).
@@ -330,16 +338,9 @@ def _names_defined_in_env_file(path: Path) -> "set[str]":
         raise
     except (OSError, UnicodeDecodeError):
         return set()
-    names: set[str] = set()
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        if not value.strip():
-            continue
-        names.add(name.strip())
-    return names
+    # The final map, as load_credentials() reads it: a later ``NAME=`` overrides
+    # an earlier value, and that blank value never reaches ``os.environ``.
+    return {name for name, value in loader.parse_env_lines(raw).items() if value}
 
 
 def service_path(home: str) -> str:
