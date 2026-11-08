@@ -147,7 +147,13 @@ from kiro_crew.apps.job_sdk_returns import (  # noqa: F401
     _undriven_result,
 )
 from kiro_crew.atomic_write import atomic_write, read_bytes_with_retry
-from kiro_crew.hooks import FileTooLargeError, safe_read_file_bytes_nolink
+from kiro_crew.hooks import (  # noqa: F401
+    FileTooLargeError,
+    _opened_path_within_root,
+    safe_read_file_bytes_nolink,
+)
+from kiro_crew.jsonl_util import open_regular_nofollow
+from kiro_crew.pinned_fs import fd_real_path
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls  # noqa: F401
 from kiro_crew.sel import sel
 
@@ -1196,32 +1202,40 @@ class JobSDK:
         stubborn_ids = set(stubborn)
         live_ids = {entry.handle.run_id for entry in live}
 
-        def _safe_read(run_id: str) -> JobRun | None:
+        def _safe_read(run_id: str, root: str) -> JobRun | None:
             # The scan walks *.json names in an app-writable directory, so a
             # path here is agent-influenced input: a planted symlink
             # ``<id>.json -> /dev/zero`` would hang an unbounded follow and
             # make disable unreachable, and one pointed at a sensitive file
-            # would pull its bytes into a parse attempt. The read goes through
-            # the repository's centralized funnel rather than a hand-rolled
-            # check: ``safe_read_file_bytes_nolink`` opens with ``O_NOFOLLOW``,
-            # validates the OPENED descriptor (regular, non-hardlinked, real
-            # path contained in ``within_root`` -- which also refuses a PARENT
-            # directory swapped for a symlink, the case a final-component
-            # check alone misses), and bounds the read. Every refusal --
-            # permission denied, a Windows sharing violation, a refused link,
-            # an oversized record -- classifies the record unreadable rather
-            # than propagating: an unreadable record must not abort the
-            # disable, and its identity still leaves an ``unreadable`` line.
-            path = self._store.dir / f"{run_id}.json"
+            # would pull its bytes into a parse attempt. So the open refuses a
+            # link at the name and a non-regular file, the read is bounded, and
+            # the OPENED descriptor must be a non-hardlinked file inside
+            # ``root``, the jobs dir as it resolved when the scan began, which
+            # also refuses a PARENT directory swapped for a symlink. Not
+            # ``safe_read_file_bytes_nolink``: that agent-facing read also
+            # refuses the security lists' protected paths, aws-control's own
+            # data dir among them. Every refusal -- permission denied, a
+            # Windows sharing violation, a refused link, an oversized record --
+            # classifies the record unreadable rather than propagating: an
+            # unreadable record must not abort the disable, and its identity
+            # still leaves an ``unreadable`` line.
+            def _in_this_store(fd: int) -> None:
+                real = fd_real_path(fd)
+                if (
+                    os.fstat(fd).st_nlink > 1
+                    or real is None
+                    or not _opened_path_within_root(real, root, root_is_canonical=True)
+                ):
+                    raise PermissionError(f"not a record of this store: {run_id!r}")
+
             try:
-                raw = safe_read_file_bytes_nolink(
-                    str(path),
-                    within_root=str(self._store.dir),
+                with open_regular_nofollow(
+                    self._store.dir / f"{run_id}.json",
                     max_bytes=_MAX_RECORD_BYTES,
-                )
-            except FileTooLargeError:
-                return None
-            if raw is None:
+                    authorize=_in_this_store,
+                ) as fh:
+                    raw = fh.read()
+            except OSError:
                 return None
             try:
                 return JobRun.from_dict(json.loads(raw.decode("utf-8")))
@@ -1246,11 +1260,12 @@ class JobSDK:
             stale: list[tuple[str, JobRun]] = []
             unreadable: list[str] = []
             if self._store.dir.is_dir():
+                root = os.path.realpath(self._store.dir)
                 for path in sorted(self._store.dir.glob("*.json")):
                     stem = path.stem
                     if stem in live_ids:
                         continue
-                    record = _safe_read(stem)
+                    record = _safe_read(stem, root)
                     if record is None:
                         unreadable.append(stem)
                     elif not record.is_terminal:

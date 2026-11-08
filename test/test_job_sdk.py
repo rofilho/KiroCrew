@@ -54,6 +54,8 @@ from kiro_crew.apps.job_sdk import (
     register_sdk,
     registered_apps,
 )
+from kiro_crew.apps.manager import app_data_dir
+from kiro_crew.hooks import safe_read_file_bytes_nolink
 
 # 1. register / kinds / is_cancellable
 
@@ -1457,6 +1459,34 @@ class TestDisableTrace:
         assert len(killed) == 1
         # `kind` comes off disk, so it is redacted, bounded, and repr-quoted.
         assert killed[0]["resources"] == f"{stale.run_id} kind='work' stale"
+
+    def test_a_protected_app_data_dir_still_traces_each_record_by_kind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The security lists fence aws-control's data dir from agent reads. The
+        disable scan reads the SDK's own store, so that fence must not turn the
+        app's records into ``unreadable`` lines: a stale run keeps its kind and a
+        finished one gets no line."""
+        events = self._capture_sel(monkeypatch)
+        monkeypatch.setenv("KIROCREW_HOME", str(tmp_path / "home"))
+        sdk = JobSDK("aws-control", app_data_dir("aws-control"))
+        stale = JobRun(
+            run_id="b" * 32, app=sdk.app_name, kind="backup", status=RUNNING, origin="foreign"
+        )
+        finished = JobRun(
+            run_id="c" * 32, app=sdk.app_name, kind="backup", status=DONE, origin="foreign"
+        )
+        sdk.store.write(stale)
+        sdk.store.write(finished)
+        # Precondition: the agent-facing read refuses this directory.
+        record = sdk.store.dir / f"{stale.run_id}.json"
+        assert safe_read_file_bytes_nolink(str(record), within_root=str(sdk.store.dir)) is None
+
+        cleanup = asyncio.run(sdk.remove_all_async())
+        assert cleanup.removed == 2
+        assert [e["resources"] for e in self._killed(events)] == [
+            f"{stale.run_id} kind='backup' stale"
+        ]
 
 
 # 12. Process-wide registry
