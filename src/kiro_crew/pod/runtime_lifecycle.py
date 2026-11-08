@@ -22,7 +22,7 @@ from kiro_crew.pod import limits as pod_limits
 from kiro_crew.pod import runtime, runtime_home
 from kiro_crew.pod import unit as unit_mod
 from kiro_crew.pod import windows as win_backend
-from kiro_crew.pod.config import PodConfig
+from kiro_crew.pod.config import SYSTEMCTL_STOP_WAIT_SECS, PodConfig
 
 # Sentinel in stop_pod's stdout meaning the pod NAME was reclaimed by a new pod
 # mid-teardown (down/up race). The old pod is gone, but per-name state (the env
@@ -264,7 +264,9 @@ def halt_pod(cfg: PodConfig, name: str) -> subprocess.CompletedProcess:
             refused = _refresh_stale_unit(cfg)
             if refused is not None:
                 return refused
-        return runtime.systemctl("stop", runtime.pod_unit(cfg, name))
+        return runtime.systemctl(
+            "stop", runtime.pod_unit(cfg, name), timeout=SYSTEMCTL_STOP_WAIT_SECS
+        )
 
 
 def restart_pod(cfg: PodConfig, name: str) -> subprocess.CompletedProcess:
@@ -373,7 +375,9 @@ def stop_pod(cfg: PodConfig, name: str) -> subprocess.CompletedProcess:
         idle_home = cfg.home_dir(name).exists() and (
             runtime.unit_state(cfg, name)[0] in ("inactive", "failed")
         )
-        cp = runtime.systemctl("stop", runtime.pod_unit(cfg, name))
+        cp = runtime.systemctl(
+            "stop", runtime.pod_unit(cfg, name), timeout=SYSTEMCTL_STOP_WAIT_SECS
+        )
         if cp.returncode != 0:
             if not idle_home:
                 # The unit may still be live; deleting its HOME here is exactly
