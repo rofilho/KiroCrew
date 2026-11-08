@@ -179,7 +179,7 @@ def test_a_fold_value_names_its_fold_and_the_gap_behind_it():
     assert kinds == ["field", "fold", "crew_log"]
     assert out["hops"][1]["path"] == "items[0].accepted"
     assert out["hops"][2]["needs"] == member_dashboard_lineage.NEEDS_FOLD_SEQ
-    assert out["edit"] == {"kind": "none", "reason": "fold"}
+    assert out["edit"] == {"kind": "fold"}
 
 
 def test_a_person_correction_is_the_top_write_and_keeps_the_bots():
@@ -288,13 +288,14 @@ def test_a_script_record_splits_what_the_gateway_stamped_from_what_the_script_sa
                 "stale_after": "2026-11-08T12:00:00+00:00",
                 "failed_at": "2026-11-08T11:00:00+00:00",
                 "last_error": "throttled",
-                "source": "CloudWatch TargetResponseTime p99",
-                "points": [400, 412],
+                "source": {"kind": "cloudwatch", "metric": "Latency", "stat": "p99"},
+                "points": [[1794141900, 400], [1794141960, 412]],
                 "provenance": {
                     "job": "p99-hourly",
                     "run_at": "x",
+                    "run_id": "",
                     "script": "crons/p.py:run",
-                    "sha": "abc",
+                    "script_sha": "abc",
                 },
             }
         }
@@ -307,13 +308,19 @@ def test_a_script_record_splits_what_the_gateway_stamped_from_what_the_script_sa
         field_found=True,
         custom=custom,
     )
+    kinds = [hop["kind"] for hop in out["hops"]]
+    # Current? still running? which script? what it says it read?
+    assert kinds == ["field", "fold", "record", "freshness", "run", "script", "source"]
     by_kind = {hop["kind"]: hop for hop in out["hops"]}
     assert by_kind["record"]["writer"] == "cron:p99-hourly"
-    assert by_kind["script"]["by"] == "gateway" and by_kind["script"]["sha"] == "abc"
-    assert by_kind["source"]["by"] == "script" and by_kind["source"]["points"] == [400, 412]
+    assert by_kind["script"]["by"] == "gateway" and by_kind["script"]["script_sha"] == "abc"
+    assert by_kind["script"]["needs"] == member_dashboard_lineage.NEEDS_RUN_ID
+    assert (
+        by_kind["source"]["by"] == "script" and by_kind["source"]["source"]["metric"] == "Latency"
+    )
     assert by_kind["freshness"]["by"] == "script"
     assert by_kind["run"]["last_error"] == "throttled"
-    assert out["edit"] == {"kind": "none", "reason": "cron", "writer": "cron:p99-hourly"}
+    assert out["edit"] == {"kind": "source", "writer": "cron:p99-hourly", "job": "p99-hourly"}
 
 
 def test_every_value_leaves_through_the_pages_redaction():
@@ -382,23 +389,32 @@ def test_the_custom_fold_keeps_a_records_lineage_cells():
                 "type": "p99",
                 "data": {"ms": 1},
                 "writer": "cron:x",
-                "source": "CloudWatch p99",
-                "points": [1, 2.5],
-                "provenance": {"job": "x", "sha": "abc", "evil": "dropped"},
+                "source": {"kind": "cloudwatch", "metric": "Latency"},
+                "points": [[1, 2.5]],
+                "provenance": {"job": "x", "script_sha": "abc", "evil": "dropped"},
             }
         ),
     )
     row = state["latest"]["p99"]
-    assert row["source"] == "CloudWatch p99" and row["points"] == [1, 2.5]
-    assert row["provenance"] == {"job": "x", "run_at": "", "script": "", "sha": "abc"}
+    assert row["source"] == {"kind": "cloudwatch", "metric": "Latency"}
+    assert row["points"] == [[1, 2.5]]
+    assert row["provenance"] == {
+        "job": "x",
+        "run_at": "",
+        "run_id": "",
+        "script": "",
+        "script_sha": "abc",
+    }
 
 
-def test_the_custom_fold_drops_points_that_are_not_numbers():
+@pytest.mark.parametrize(
+    "extra",
+    [{"points": [[1, True]]}, {"points": [1, 2]}, {"source": {"kind": "ftp"}}],
+)
+def test_the_custom_fold_drops_lineage_cells_it_would_refuse(extra):
     state = fold._custom_start()
-    fold._custom_step(
-        state, _custom({"type": "p", "data": {"v": 1}, "writer": "cron:x", "points": [1, True]})
-    )
-    assert "points" not in state["latest"]["p"]
+    fold._custom_step(state, _custom({"type": "p", "data": {"v": 1}, "writer": "cron:x", **extra}))
+    assert "points" not in state["latest"]["p"] and "source" not in state["latest"]["p"]
 
 
 # ---------------------------------------------------------------- record door
@@ -407,12 +423,22 @@ def test_the_custom_fold_drops_points_that_are_not_numbers():
 @pytest.mark.parametrize(
     "body,code",
     [
-        ({"source": "x\ny"}, "bad_source"),
-        ({"source": "s" * 241}, "bad_source"),
+        ({"source": "CloudWatch"}, "bad_source"),
+        ({"source": {"kind": "ftp"}}, "bad_source"),
+        ({"source": {"kind": "other"}}, "bad_source"),
+        ({"source": {"kind": "http", "console_url": "http://x"}}, "bad_source"),
+        ({"source": {"kind": "http", "label": "s" * 3000}}, "bad_source"),
         ({"points": []}, "bad_points"),
-        ({"points": [1, "2"]}, "bad_points"),
-        ({"points": [float("inf")]}, "bad_points"),
-        ({"source": "CloudWatch", "points": [1, 2]}, None),
+        ({"points": [[1, "2"]]}, "bad_points"),
+        ({"points": [[1, float("inf")]]}, "bad_points"),
+        ({"points": [1, 2]}, "bad_points"),
+        (
+            {
+                "source": {"kind": "cloudwatch", "console_url": "https://console.example"},
+                "points": [[1794141900, 351]],
+            },
+            None,
+        ),
     ],
 )
 def test_the_record_door_checks_a_declared_source_and_points(body, code):
@@ -433,7 +459,8 @@ def test_the_gateway_stamps_the_job_and_the_scripts_sha(tmp_path, monkeypatch):
     import hashlib
 
     assert stamp["job"] == "j1" and stamp["script"] == "p.py:run"
-    assert stamp["sha"] == hashlib.sha256(script.read_bytes()).hexdigest()[:12]
+    assert stamp["script_sha"] == hashlib.sha256(script.read_bytes()).hexdigest()
+    assert stamp["run_id"] == ""
     assert agent_panel_record.cron_provenance(state, "cron:gone")["script"] == ""
 
 

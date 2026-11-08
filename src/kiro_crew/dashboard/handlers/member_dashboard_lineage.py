@@ -43,6 +43,7 @@ REASON_LIMIT: Final[int] = 240
 #: Gaps the record cannot fill yet, by the words the host shows.
 NEEDS_FOLD_SEQ: Final[str] = "entry seq on fold rows"
 NEEDS_LOOKED_AT: Final[str] = "source + observed_at on dashboard_write"
+NEEDS_RUN_ID: Final[str] = "run id on the scheduler's job record"
 
 #: The custom fold's name, as ``crew_log.entry_types_surfaces.CUSTOM_FOLD_NAME`` spells it.
 _CUSTOM_FOLD: Final[str] = "custom"
@@ -77,23 +78,8 @@ def _record_hops(record_type: str, row: Mapping[str, Any] | None) -> list[dict[s
             "by": "gateway",
         }
     ]
-    provenance = row.get("provenance")
-    if isinstance(provenance, Mapping):
-        hops.append(
-            {
-                "kind": "script",
-                "job": str(provenance.get("job") or ""),
-                "run_at": str(provenance.get("run_at") or ""),
-                "script": str(provenance.get("script") or ""),
-                "sha": str(provenance.get("sha") or ""),
-                "by": "gateway",
-            }
-        )
-    if isinstance(row.get("source"), str) and row.get("source"):
-        source: dict[str, Any] = {"kind": "source", "source": row["source"], "by": "script"}
-        if isinstance(row.get("points"), list):
-            source["points"] = row["points"]
-        hops.append(source)
+    # In the order a reader asks: is it current, did the job keep running, which
+    # script wrote it, and what that script says it read.
     hops.append(
         {
             "kind": "freshness",
@@ -111,6 +97,25 @@ def _record_hops(record_type: str, row: Mapping[str, Any] | None) -> list[dict[s
                 "by": "gateway",
             }
         )
+    provenance = row.get("provenance")
+    if isinstance(provenance, Mapping):
+        script: dict[str, Any] = {
+            "kind": "script",
+            "job": str(provenance.get("job") or ""),
+            "run_at": str(provenance.get("run_at") or ""),
+            "run_id": str(provenance.get("run_id") or ""),
+            "script": str(provenance.get("script") or ""),
+            "script_sha": str(provenance.get("script_sha") or ""),
+            "by": "gateway",
+        }
+        if not script["run_id"]:
+            script["needs"] = NEEDS_RUN_ID
+        hops.append(script)
+    if isinstance(row.get("source"), Mapping):
+        source: dict[str, Any] = {"kind": "source", "source": dict(row["source"]), "by": "script"}
+        if isinstance(row.get("points"), list):
+            source["points"] = row["points"]
+        hops.append(source)
     return hops
 
 
@@ -184,7 +189,12 @@ def build_lineage(
                 }
             )
         hops.append({"kind": "looked_at", "needs": NEEDS_LOOKED_AT})
-        edit: dict[str, Any] = {"kind": "correct", "type": spec.type}
+        # A whole object or list is not typed by hand: the popover offers Ask instead.
+        edit: dict[str, Any] = {
+            "kind": "correct",
+            "type": spec.type,
+            "scalar": spec.type not in ("array", "object"),
+        }
     else:
         fold, fold_path = str(spec.fold or ""), str(spec.path or "")
         kind = "custom" if fold == _CUSTOM_FOLD else "fold"
@@ -210,10 +220,11 @@ def build_lineage(
             record_type, row = _custom_row(custom, fold_path)
             hops.extend(_record_hops(record_type, row))
             writer = str((row or {}).get("writer") or "")
-            edit = {"kind": "none", "reason": "cron", "writer": writer}
+            job = writer.removeprefix("cron:") if writer.startswith("cron:") else ""
+            edit = {"kind": "source", "writer": writer, "job": job}
         else:
             hops.append({"kind": "crew_log", "fold": fold, "needs": NEEDS_FOLD_SEQ})
-            edit = {"kind": "none", "reason": "fold"}
+            edit = {"kind": "fold"}
     return redact(
         {
             "path": path,
@@ -377,6 +388,9 @@ async def api_member_dashboard_correct(request: web.Request) -> web.Response:
         entry = dashboard_agentic.check_write(package.model, field, body["value"])
     except dashboard_agentic.WriteRefused as refused:
         return _bad(refused.code, dashboard_agentic.refusal_sentence(refused))
+    if entry.get("type") in ("array", "object"):
+        # A whole list or record is the Bot's to rebuild; the person asks instead.
+        return _bad("not_scalar", "a list or object value cannot be corrected by hand; ask the Bot")
     entry["crew_key"] = agent_panel.crew_key(member)
     entry["actor"] = "person"
     if reason.strip():

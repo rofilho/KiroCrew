@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Lock, RotateCw } from 'lucide-react'
+import { Lock, PencilRuler, RotateCw } from 'lucide-react'
 import { api, type DashboardManifest } from '../../api/client'
 import { apiErrorCode, isNotFoundError } from '../../api/apiError'
 import { retryPolicy } from '../../api/queryClient'
@@ -21,6 +21,11 @@ import CrewDashboardBehindBand from './CrewDashboardBehindBand'
 import CrewDashboardDownload from './CrewDashboardDownload'
 import { applyPushedRead, withIslandRead, type DashboardRead } from './dashboardDownloadFile'
 import { CREW_DASHBOARD_SANDBOX } from '../../lib/crewDashboardSandbox'
+import { usePreviewFlag } from '../../hooks/usePreviewFlag'
+import { PREVIEW_DASHBOARD_EDIT_MODE } from '../../utils/previewFlags'
+
+// Edit mode is held behind its preview and loaded only when the person turns it on.
+const CrewDashboardEditLayer = lazy(() => import('./CrewDashboardEditLayer'))
 
 // The grant set lives in lib/crewDashboardSandbox.ts so the artifact viewer can
 // open a crewmate's report in the same sandbox without loading this page.
@@ -253,8 +258,11 @@ export function dashboardQueryKey(target: DashboardTarget): readonly string[] {
     : [SESSION_DASHBOARD_QUERY_PREFIX, target.slot]
 }
 
-export default function CrewDynamicDashboard({ target, displayName, avatar, onAct, preview = false, onPreviewGone, onPreviewLoaded, onOpenProfileTab, dashboardSlug = '', relayWheel = false }: {
+export default function CrewDynamicDashboard({ target, displayName, avatar, onAct, onSend, preview = false, onPreviewGone, onPreviewLoaded, onOpenProfileTab, dashboardSlug = '', relayWheel = false }: {
   target: DashboardTarget
+  /** Send the person's own chat message to this Bot (Dashboard edit mode's change
+   *  request). Resolves whether it went. Absent: the request box says there is no chat. */
+  onSend?: (text: string) => Promise<boolean>
   /** Report the frame's horizontal wheel runs to the host (see `relayWheel` in
    *  lib/widgetSrcdoc). Only a host that listens may ask: the relay cancels the
    *  browser's back swipe over the frame. The Mates side panel does. */
@@ -283,6 +291,9 @@ export default function CrewDynamicDashboard({ target, displayName, avatar, onAc
   dashboardSlug?: string
 }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null)
+  /** Dashboard edit mode: offered only with its preview on, on a Bot's live page. */
+  const editPreview = usePreviewFlag(PREVIEW_DASHBOARD_EDIT_MODE)
+  const [editing, setEditing] = useState(false)
   /** A gap recovery that did not arrive. The page keeps its values; this says they
    *  are older than the record, which nothing else on screen can say: the read
    *  that would have moved them never came. */
@@ -1274,12 +1285,23 @@ export default function CrewDynamicDashboard({ target, displayName, avatar, onAc
   return (
     <div className="group relative h-full min-h-0 flex flex-col" data-testid="crew-dashboard-frame" data-preview={preview ? 'true' : undefined}>
       {lockBadge}
-      {target.kind === 'member' && !preview && (
+      {target.kind === 'member' && !preview && !(editPreview && editing) && (
+        // Not while editing: the edit bar holds this corner, and its Done sits here.
         // The bot's live page only: a staged preview is not the page anyone keeps,
         // and a session's page is not a bot's Dashboard. Floated over the page's
         // top-right corner and shown on hover, so it takes no row of its own; a
         // device with no hover and a keyboard focus both keep it visible.
         <div className="absolute right-2 top-2 z-10 flex max-w-[80%] items-start justify-end gap-2" style={lockBadge ? { top: '2.25rem' } : undefined}>
+          {editPreview && url && !editing && (
+            <Btn
+              onClick={() => setEditing(true)}
+              data-testid="crew-dashboard-edit"
+              className="border border-border bg-bg-elevated shadow-sm opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+            >
+              <PencilRuler size={13} className="lucide-inline" aria-hidden />
+              {i18nT('pages.membersPage.dashboardEdit.edit')}
+            </Btn>
+          )}
           <CrewDashboardDownload
             name={displayName}
             ready={visibleIsCurrent}
@@ -1432,6 +1454,22 @@ export default function CrewDynamicDashboard({ target, displayName, avatar, onAc
             {i18nT('pages.membersPage.webview_retry')}
           </Btn>
         </div>
+      )}
+      {editPreview && editing && url && target.kind === 'member' && !preview && (
+        <Suspense fallback={null}>
+          <CrewDashboardEditLayer
+            frameRef={frameRef}
+            frameKey={`${grantKey}-${url}`}
+            slug={target.slug}
+            member={target.member}
+            botName={displayName}
+            manifest={shown.manifest}
+            board={shown.dashboard || shown.templateId}
+            instanceVersion={shown.instanceVersion}
+            onSend={onSend}
+            onDone={() => setEditing(false)}
+          />
+        </Suspense>
       )}
       {url ? [
         <iframe
