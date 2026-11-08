@@ -59,6 +59,7 @@ from .shell_normalizer import (
     _substitution_bodies,
     _substitution_depth_delta,
 )
+from .shell_normalizer_programs import _DATA_CONSUMER_PROGRAMS
 from .vocabulary import _KILL_BY_NAME_PROGRAMS, _SELF_NAME_RE
 
 # ── Self-protection floor (argv-structural, not a regex) ──
@@ -440,7 +441,10 @@ def _kill_prefix_keeps_anchor(words: "list[tuple[str, bool]]", word: "list[str]"
 
 
 def _bare_kill_raw_bodies(
-    source: str, anchor_basenames: "frozenset[str]" = frozenset({"kill"})
+    source: str,
+    anchor_basenames: "frozenset[str]" = frozenset({"kill"}),
+    *,
+    data_args_exempt: bool = False,
 ) -> "list[str]":
     """Substitution bodies inside a kill's own argv, read from the RAW text.
 
@@ -451,6 +455,14 @@ def _bare_kill_raw_bodies(
     by-name clause (see :func:`_is_self_kill`). The anchor resolution, the
     forward and segment bounds, and the quote-aware span scan are identical for
     both; only which program word opens the window differs.
+
+    *data_args_exempt* gives the window the token leg's data-consumer exemption
+    (``_data_consumer_exempt``): an anchor word that is an ARGUMENT of a program
+    in ``_DATA_CONSUMER_PROGRAMS`` (``grep -l pkill $(ls ~/.kirocrew/logs)``,
+    ``echo killall $(...)``) is data and opens no window. The exemption is never
+    given to a segment that a pipe ends (``echo pkill $(...) | sh`` runs the text),
+    nor to an anchor in program position. The by-name family passes it; the bare
+    ``kill`` leg keeps main's reading.
 
     The token walk in :func:`_is_self_kill` bounds the same window with
     :func:`_substitution_depth_delta`, which counts parens on tokens
@@ -555,13 +567,30 @@ def _bare_kill_raw_bodies(
             name = name[1:-1]
         return _shell_normalizer._program_basename(aliases.get(name, "")) in anchor_basenames
 
-    def end_segment() -> None:
+    def program_at() -> "int | None":
+        # The segment's program word: the first word after the ``VAR=val`` prefix.
+        for k, (w, _g) in enumerate(words):
+            if _RAW_ASSIGNMENT_RE.match(w) is None:
+                return k
+        return None
+
+    def end_segment(separator: str = "") -> None:
         end_word()
         # Anchor selection BEFORE recording this segment's assignments: bash
         # expands ``$k`` before the same command's ``k=...`` takes effect, so
         # ``k=kill $k ...`` must not see its own assignment.
+        prog = program_at() if data_args_exempt and separator != "|" else None
+        exempt = (
+            prog is not None
+            and not words[prog][1]
+            and _shell_normalizer._program_basename(words[prog][0]) in _DATA_CONSUMER_PROGRAMS
+        )
         kill_at = next(
-            (k for k, (w, g) in enumerate(words) if not g and resolves_to_kill(w)),
+            (
+                k
+                for k, (w, g) in enumerate(words)
+                if not g and not (exempt and k != prog) and resolves_to_kill(w)
+            ),
             None,
         )
         if kill_at is not None:
@@ -693,7 +722,7 @@ def _bare_kill_raw_bodies(
                     word.append(ch)
                     continue
                 if ch in ";|&\n":
-                    end_segment()
+                    end_segment(ch)
                     continue
                 if ch == "#" and not word and not open_word:
                     newline = source.find("\n", off)
@@ -871,8 +900,10 @@ def _is_self_kill(text_lower: str) -> bool:
         # bodies need no extra machinery: the token leg already treats the
         # product name anywhere in a by-name argv as the target, so scanning a
         # decoy-dropped body the same way only restores that reach quote-aware.
-        for anchor in (frozenset({"kill"}), _KILL_BY_NAME_PROGRAMS):
-            for body in _bare_kill_raw_bodies(source, anchor):
+        # The by-name window takes the token leg's data-consumer exemption, so a
+        # ``grep -l pkill $(...)`` that only mentions the word stays allowed.
+        for anchor, exempt in ((frozenset({"kill"}), False), (_KILL_BY_NAME_PROGRAMS, True)):
+            for body in _bare_kill_raw_bodies(source, anchor, data_args_exempt=exempt):
                 if _raw_body_names_self(body):
                     return True
     return False
