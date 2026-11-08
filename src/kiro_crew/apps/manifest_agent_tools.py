@@ -10,12 +10,18 @@ lists the declared tools and forwards a call (``apps/app_agent_tools.py``).
 
 What a declaration can and cannot do is decided here, before anything reads it:
 
-- a tool name begins with the app's own name (``-`` read as ``_``) and ``_``, so an app
-  names tools in its own namespace only;
+- a tool name begins with the app's namespace and ``_``, so an app names tools in its own
+  namespace only. The namespace is the app's own name (``-`` read as ``_``) unless the
+  block states one (``namespace``), which a tool name a person or a policy already knows
+  needs: an app keeps the names its tools had before they moved onto this seam;
 - the route is a plain path below the app's own API, never a URL, a query or ``..``;
 - an argument schema uses the small JSON Schema subset the core validator enforces
   (``string`` with ``enum`` / ``maxLength``, ``integer``, ``number``, ``boolean``, and
   arrays of strings or integers), so every declared constraint is one the core checks.
+
+A tool also states how long the core waits for its answer (``timeoutSeconds``) and
+whether that answer is JSON or the app's own text (``result``, below); the core redacts
+either.
 
 A malformed block is kept with its errors: ``AppManifest.validate`` refuses the install,
 and the reader skips every tool of a block that carries an error.
@@ -38,6 +44,15 @@ MAX_TOOL_TITLE_CHARS = 80
 #: shipped declarations used before this seam existed.
 MAX_RESULT_CHARS = 60_000
 DEFAULT_RESULT_CHARS = 20_000
+#: How long the core waits for a forwarded call by default, and at most: the default is
+#: the wait every core-to-gateway post already has.
+DEFAULT_TIMEOUT_SECONDS = 30
+MAX_TIMEOUT_SECONDS = 600
+#: ``json``: the app answers with any JSON object, which the core serializes and redacts.
+#: ``text``: the app answers with the model-facing text it formatted, which the core
+#: redacts and relays as text; only a credential the answer names is kept verbatim.
+RESULT_MODES = ("json", "text")
+
 #: The longest string argument a tool may accept when its schema states no
 #: ``maxLength``, and the largest ``maxLength`` it may state.
 MAX_STRING_ARGUMENT_CHARS = 65_536
@@ -46,11 +61,15 @@ MAX_STRING_ARGUMENT_CHARS = 65_536
 MAX_ARRAY_ITEMS = 256
 
 TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+MAX_NAMESPACE_CHARS = 32
 #: A route below the app's own API: lowercase segments, no scheme, host, query or dot.
 ROUTE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}(?:/[a-z0-9][a-z0-9_-]{0,63}){0,3}$")
 
-_BLOCK_KEYS = frozenset({"route", "tools"})
-_TOOL_KEYS = frozenset({"name", "title", "description", "inputSchema", "maxResultChars"})
+_BLOCK_KEYS = frozenset({"namespace", "route", "tools"})
+_TOOL_KEYS = frozenset(
+    {"name", "title", "description", "inputSchema", "maxResultChars", "timeoutSeconds", "result"}
+)
 _OBJECT_KEYS = frozenset({"type", "properties", "required", "additionalProperties"})
 _SCALAR_KEYS: dict[str, frozenset[str]] = {
     "string": frozenset({"type", "description", "enum", "maxLength"}),
@@ -65,9 +84,12 @@ _ITEM_KEYS: dict[str, frozenset[str]] = {
 }
 
 
-def tool_namespace(app_name: str) -> str:
-    """The prefix every tool of *app_name* begins with: ``issue-radar`` -> ``issue_radar_``."""
-    return app_name.replace("-", "_") + "_"
+def tool_namespace(app_name: str, namespace: str = "") -> str:
+    """The prefix every tool of *app_name* begins with: ``issue-radar`` -> ``issue_radar_``.
+
+    A block that states a *namespace* uses it instead: ``pod`` -> ``pod_``.
+    """
+    return (namespace or app_name.replace("-", "_")) + "_"
 
 
 @dataclass(frozen=True)
@@ -79,6 +101,8 @@ class AgentToolDecl:
     input_schema: dict[str, Any] = field(hash=False)
     title: str = ""
     max_result_chars: int = DEFAULT_RESULT_CHARS
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    result: str = "json"
 
     def descriptor(self) -> dict[str, Any]:
         """The ``tools/list`` descriptor."""
@@ -98,6 +122,7 @@ class AgentToolsConfig:
 
     route: str = ""
     tools: list[AgentToolDecl] = field(default_factory=list)
+    namespace: str = ""
     errors: list[str] = field(default_factory=list, compare=False)
     #: The block as written, kept so a round trip and the signed payload carry it.
     raw: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
@@ -108,9 +133,9 @@ class AgentToolsConfig:
     def validate(self, app_name: str) -> list[str]:
         """Shape errors plus the namespace rule, which needs the app's own name."""
         errors = list(self.errors)
-        prefix = tool_namespace(app_name)
+        prefix = tool_namespace(app_name, self.namespace)
         for tool in self.tools:
-            if app_name and not tool.name.startswith(prefix):
+            if (app_name or self.namespace) and not tool.name.startswith(prefix):
                 errors.append(
                     f"agentTools: tool {tool.name!r} must begin with {prefix!r}, "
                     "the app's own namespace"
@@ -128,6 +153,16 @@ class AgentToolsConfig:
         unknown = sorted(set(raw) - _BLOCK_KEYS)
         if unknown:
             errors.append(f"agentTools: unknown keys {unknown}")
+        namespace = raw.get("namespace", "")
+        if not isinstance(namespace, str) or (
+            namespace
+            and (len(namespace) > MAX_NAMESPACE_CHARS or not NAMESPACE_RE.fullmatch(namespace))
+        ):
+            errors.append(
+                f"agentTools.namespace must be a lowercase identifier of at most "
+                f"{MAX_NAMESPACE_CHARS} characters, such as 'pod'"
+            )
+            namespace = ""
         route = raw.get("route", "")
         if not isinstance(route, str) or not ROUTE_RE.fullmatch(route):
             errors.append(
@@ -153,7 +188,9 @@ class AgentToolsConfig:
             names = [t.name for t in tools]
             if len(set(names)) != len(names):
                 errors.append("agentTools.tools: a tool name is declared twice")
-        return cls(route=route, tools=tools, errors=errors, raw=copy.deepcopy(raw))
+        return cls(
+            route=route, tools=tools, namespace=namespace, errors=errors, raw=copy.deepcopy(raw)
+        )
 
 
 def _is_int(value: Any) -> bool:
@@ -191,6 +228,12 @@ def _parse_tool(where: str, raw: Any) -> tuple[AgentToolDecl | None, list[str]]:
     cap = raw.get("maxResultChars", DEFAULT_RESULT_CHARS)
     if not _is_int(cap) or not 0 < cap <= MAX_RESULT_CHARS:
         errors.append(f"{where}: maxResultChars must be an integer from 1 to {MAX_RESULT_CHARS}")
+    timeout = raw.get("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS)
+    if not _is_int(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS:
+        errors.append(f"{where}: timeoutSeconds must be an integer from 1 to {MAX_TIMEOUT_SECONDS}")
+    result = raw.get("result", "json")
+    if result not in RESULT_MODES:
+        errors.append(f"{where}: result must be one of {list(RESULT_MODES)}")
     schema = raw.get("inputSchema")
     errors.extend(_schema_errors(where, schema))
     if errors:
@@ -202,6 +245,8 @@ def _parse_tool(where: str, raw: Any) -> tuple[AgentToolDecl | None, list[str]]:
             input_schema=copy.deepcopy(schema),  # type: ignore[arg-type]
             title=title,
             max_result_chars=cap,
+            timeout_seconds=timeout,
+            result=result,
         ),
         [],
     )
