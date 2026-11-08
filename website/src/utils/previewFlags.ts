@@ -209,7 +209,7 @@ export const PREVIEW_EXPLORE = `${PREVIEW_FLAG_PREFIX}explore`
 export const PREVIEW_CREW_OAUTH = `${PREVIEW_FLAG_PREFIX}crew-oauth`
 
 /**
- * Crewmate chat colours from the crewmate's dashboard page (#20635): the chat
+ * Crewmate chat colours from the crewmate's dashboard page: the chat
  * column on the Crewmates page tints its background and accent from the colour
  * tokens of the dashboard page that crewmate has in force, so the chat and the
  * Dashboard tab beside it read as one theme.

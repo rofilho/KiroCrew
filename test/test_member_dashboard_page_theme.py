@@ -1,4 +1,4 @@
-"""``_page_theme``: the bounded set of page colour tokens the chat may follow (#20635).
+"""``_page_theme``: the bounded set of page colour tokens the chat may follow.
 
 The chat follows exactly the page's ``--bg`` and ``--accent`` tokens and nothing else,
 so a free-form page palette cannot push an arbitrary custom property onto the chat.

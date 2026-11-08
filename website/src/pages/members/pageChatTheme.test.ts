@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { contrastRatio, parseCssColor } from '../../apps/crew-companion/contrast'
+import { contrastRatio, parseCssColor, relativeLuminance } from '../../lib/iconContrast'
 import { CHAT_AA_TEXT, chatThemeVars, readableText } from './pageChatTheme'
 
-/** The measured contrast of a `#rrggbb` text colour on a `#rrggbb` background. */
+/** The measured WCAG contrast of one CSS colour on another (both opaque). */
 function ratio(fg: string, bg: string): number {
   const f = parseCssColor(fg)!
   const b = parseCssColor(bg)!
-  return contrastRatio(f, b)
+  return contrastRatio(relativeLuminance(f.r, f.g, f.b), relativeLuminance(b.r, b.g, b.b))
 }
 
 describe('readableText', () => {
@@ -24,9 +24,10 @@ describe('readableText', () => {
     expect(dark.ratio).toBeCloseTo(ratio(dark.color, '#101418'), 5)
   })
 
-  it('returns null for an unparseable colour rather than guessing', () => {
+  it('returns null for an unparseable colour, and for a non-opaque one', () => {
     expect(readableText('rebeccapurple')).toBeNull()
     expect(readableText('')).toBeNull()
+    expect(readableText('rgba(0,0,0,0)')).toBeNull()
   })
 })
 
@@ -37,15 +38,30 @@ describe('chatThemeVars', () => {
     expect(chatThemeVars({})).toEqual({})
   })
 
-  it('pairs every emitted background with a text colour that clears 4.5:1', () => {
-    // A strongly coloured dark page, light mode on the Dashboard tab mirrored.
-    for (const bg of ['#101418', '#f3f4f6', '#1e3a8a', '#fef3c7']) {
+  it('pairs every recoloured surface with a foreground that clears 4.5:1', () => {
+    // Dark and light page backgrounds, plus a mid-tone that leaves muted little
+    // room (the muting backs off to keep AA rather than ship a dim label).
+    for (const bg of ['#101418', '#f3f4f6', '#1e3a8a', '#fef3c7', '#8855ee']) {
       const vars = chatThemeVars({ '--bg': bg })
       expect(vars['--bg']).toBe(bg)
+      // Body text and bubble text both clear AA on the surfaces they sit on.
       expect(ratio(vars['--text'], vars['--bg'])).toBeGreaterThanOrEqual(CHAT_AA_TEXT)
-      // Bubbles ride the same surface, paired the same way.
       expect(ratio(vars['--card-fg'], vars['--card'])).toBeGreaterThanOrEqual(CHAT_AA_TEXT)
+      // Muted secondary text stays legible (>= 4.5:1) on the page background.
+      expect(ratio(vars['--muted'], vars['--bg'])).toBeGreaterThanOrEqual(CHAT_AA_TEXT)
     }
+  })
+
+  it('steps the card and chrome surfaces OFF the background so bubbles are visible', () => {
+    const vars = chatThemeVars({ '--bg': '#2a1a4d' })
+    // The card is a distinct surface, not the raw background (the UX finding:
+    // bubbles must not melt into the column).
+    expect(vars['--card']).toBeDefined()
+    expect(vars['--card']).not.toBe(vars['--bg'])
+    expect(vars['--bg-hover']).not.toBe(vars['--bg'])
+    expect(vars['--bg-elevated']).not.toBe(vars['--bg'])
+    // A visible edge is defined.
+    expect(vars['--border']).toBeTruthy()
   })
 
   it('pairs the accent with a readable label colour', () => {
@@ -62,6 +78,12 @@ describe('chatThemeVars', () => {
       expect(vars['--bg']).toBe(bg)
       expect(ratio(vars['--text'], vars['--bg'])).toBeGreaterThanOrEqual(CHAT_AA_TEXT)
     }
+  })
+
+  it('refuses a non-opaque background rather than theme against a false backdrop', () => {
+    // rgba with zero alpha would composite to a fiction; the chat keeps its theme.
+    expect(chatThemeVars({ '--bg': 'rgba(0,0,0,0)' })).toEqual({})
+    expect(chatThemeVars({ '--bg': 'rgba(10,10,40,0.4)' })).toEqual({})
   })
 
   it('ignores an unparseable token instead of applying it', () => {

@@ -712,7 +712,7 @@ _MASKED_VALUE_KEYS = frozenset({"worker_session_key", "crew_key"})
 _KEY_BEARING_EVENT_KINDS = frozenset({"bind"})
 
 
-#: The page theme tokens the CHAT follows (#20635): the two whose role is
+#: The page theme tokens the CHAT follows: the two whose role is
 #: unambiguous. A page's tokens are free-form custom-property names its author
 #: picks, so the chat reads exactly these two by name -- the page background and
 #: the page accent, the same names the app's own theme uses -- and derives every
@@ -1997,7 +1997,7 @@ async def _serve_package(
             # amendment's fourth reason, and why the profile has to be read too.
             "scripts": scripts,
             "locale": read.get("locale", locale) if isinstance(read, dict) else locale,
-            # THE CHAT'S COLOUR SOURCE (#20635): the bounded set of page colour
+            # THE CHAT'S COLOUR SOURCE: the bounded set of page colour
             # tokens the Crewmates-page chat may follow, off the package's own
             # theme. Absent for a page that declares neither, so an untinted page
             # adds no key and the chat keeps its default look. The dashboard gates
